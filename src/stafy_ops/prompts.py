@@ -36,7 +36,7 @@ Grounding rules:
 - Never invent file paths, function names, endpoints, or current behavior. You cannot see the code.
 - Acceptance criteria must be concrete, independently checkable statements.
 - Put unresolved gaps in `open_questions`.
-- `api_contract`: none | new endpoint | breaking change. `roles`: affected roles or "none". `money_data`: true if rates, bonuses, payroll or reports are touched.
+- `api_contract`: none | new endpoint | breaking change. `roles`: the roles whose permissions or access rules change (auth/RBAC), otherwise "none" — a UI-only or behavior change that merely concerns managers/admins is NOT an RBAC change; a non-"none" value adds a security-review checkbox. `money_data`: true if rates, bonuses, payroll or reports are touched.
 - `milestone`: only stafy-backend and stafy-web-app use milestones; always null for stafy-landing and workspace. Otherwise null unless the user explicitly names a version (e.g. "v0.3.0", "pune-l în 0.3.0" -> "v0.3.0"). Never guess or propose one; the app chooses the default and shows it to the user.
 - If a draft was already shown and the user replies with changes, return the full revised `issues` list (drop an issue if the user asks to)."""
 
