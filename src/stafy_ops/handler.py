@@ -1,4 +1,7 @@
+import asyncio
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -43,6 +46,30 @@ class Bot:
     def __init__(self, settings: Settings, tg: Messenger, llm: LLM, gh: IssueCreator, store: ConversationStore) -> None:
         self._s, self._tg, self._llm, self._gh, self._store = settings, tg, llm, gh, store
 
+    @contextlib.asynccontextmanager
+    async def _typing(self, chat_id: int) -> AsyncIterator[None]:
+        """Shows Telegram's "typing..." indicator while work is in flight (it lasts ~5 s, so refresh every 4 s)."""
+
+        async def ping() -> None:
+            try:
+                await self._tg.send_chat_action(chat_id)
+            except httpx.HTTPError as exc:  # cosmetic only — never break the real work
+                log.debug("chat action failed: %s", exc)
+
+        async def refresh() -> None:
+            while True:
+                await asyncio.sleep(4)
+                await ping()
+
+        await ping()
+        task = asyncio.create_task(refresh())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
     async def handle_update(self, update: dict) -> None:
         if (update_id := update.get("update_id")) is not None and await self._store.seen(update_id):
             return
@@ -78,7 +105,8 @@ class Bot:
     async def _advance(self, chat_id: int, conv: Conversation, force: bool = False) -> None:
         limit = self._s.max_question_rounds
         try:
-            turn = await self._llm.next_turn(conv.messages, force_draft=force or conv.rounds >= limit)
+            async with self._typing(chat_id):
+                turn = await self._llm.next_turn(conv.messages, force_draft=force or conv.rounds >= limit)
         except (LLMError, httpx.HTTPError) as exc:
             log.warning("LLM failed: %s", exc)
             await self._tg.send_message(chat_id, "Nu am putut procesa mesajul (eroare LLM). Încearcă din nou.")
@@ -112,7 +140,8 @@ class Bot:
                 await self._tg.send_message(chat_id, "Nu am un draft activ.")
                 return
             try:
-                created = await self._gh.create_issue(conv.pending)
+                async with self._typing(chat_id):
+                    created = await self._gh.create_issue(conv.pending)
             except httpx.HTTPError as exc:
                 log.warning("GitHub create failed: %s", exc)
                 await self._tg.send_message(chat_id, f"GitHub a refuzat crearea: {exc}. Draftul rămâne, apasă Create din nou.")

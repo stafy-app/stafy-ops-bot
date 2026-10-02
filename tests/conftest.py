@@ -44,12 +44,16 @@ class FakeLLM:
 class FakeTelegram:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str, dict | None]] = []
+        self.actions: list[tuple[int, str]] = []
 
     async def send_message(self, chat_id, text, reply_markup=None):
         self.sent.append((chat_id, text, reply_markup))
 
     async def answer_callback(self, callback_id):
         pass
+
+    async def send_chat_action(self, chat_id, action="typing"):
+        self.actions.append((chat_id, action))
 
 
 class FakeGitHub:

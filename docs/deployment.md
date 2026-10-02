@@ -27,7 +27,7 @@ Redeploy after changing variables — they apply to new deployments only.
 
 ## 4. Verify the deployment
 
-Open `https://<project>.vercel.app/health` → `{"ok": true}`. Use the **production domain**, not a per-deployment URL. If Vercel Authentication protects it, Telegram gets a 401 and `webhook-info` shows `last_error_message` — exclude the production domain from Deployment Protection.
+If the project has a custom primary domain (e.g. `bot.stafy.ro`), `<project>.vercel.app` answers with a 307 redirect to it, and **Telegram does not follow redirects on webhooks** — always register the primary domain. Open `https://<primary-domain>/health` → `{"ok": true}`. Use the **production domain**, not a per-deployment URL. If Vercel Authentication protects it, Telegram gets a 401 and `webhook-info` shows `last_error_message` — exclude the production domain from Deployment Protection.
 
 ## 5. Point Telegram at it
 

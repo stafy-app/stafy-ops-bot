@@ -12,7 +12,7 @@ install:
 poll:
     uv run python -m stafy_ops.polling
 
-# Run the webhook server (http://localhost:8001/docs)
+# Run the webhook server on http://localhost:8001 (/health, POST /telegram/webhook; no /docs)
 dev:
     uv run uvicorn stafy_ops.app:app --reload --port 8001
 

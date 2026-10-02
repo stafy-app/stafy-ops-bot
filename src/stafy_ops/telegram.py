@@ -5,9 +5,14 @@ import httpx
 _MAX_LEN = 4000  # Telegram hard limit is 4096
 
 
+class TelegramError(httpx.HTTPError):
+    """Telegram API failure with the token-bearing URL stripped from the message."""
+
+
 class Messenger(Protocol):
     async def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> None: ...
     async def answer_callback(self, callback_id: str) -> None: ...
+    async def send_chat_action(self, chat_id: int, action: str = "typing") -> None: ...
 
 
 class TelegramClient:
@@ -16,8 +21,15 @@ class TelegramClient:
         self._client = client or httpx.AsyncClient(timeout=40)
 
     async def _call(self, method: str, payload: dict) -> dict:
-        resp = await self._client.post(f"{self._base}/{method}", json=payload)
-        resp.raise_for_status()
+        # The bot token is part of the URL, and httpx puts the URL in its error messages, which end up in
+        # logs. Re-raise without it (`from None` also drops the chained original).
+        try:
+            resp = await self._client.post(f"{self._base}/{method}", json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise TelegramError(f"{method} failed: HTTP {exc.response.status_code} {exc.response.text[:200]}") from None
+        except httpx.RequestError as exc:
+            raise TelegramError(f"{method} failed: {type(exc).__name__}") from None
         return resp.json()
 
     async def get_updates(self, offset: int | None, timeout: int = 30) -> list[dict]:
@@ -34,3 +46,6 @@ class TelegramClient:
 
     async def answer_callback(self, callback_id: str) -> None:
         await self._call("answerCallbackQuery", {"callback_query_id": callback_id})
+
+    async def send_chat_action(self, chat_id: int, action: str = "typing") -> None:
+        await self._call("sendChatAction", {"chat_id": chat_id, "action": action})

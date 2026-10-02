@@ -8,7 +8,7 @@ from stafy_ops.bootstrap import build_bot
 from stafy_ops.config import get_settings
 
 log = logging.getLogger(__name__)
-app = FastAPI(title="Stafy Ops Bot")
+app = FastAPI(title="Stafy Ops Bot", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @lru_cache
@@ -26,7 +26,7 @@ async def telegram_webhook(
     request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)
 ) -> dict:
     secret = get_settings().telegram_webhook_secret
-    if not secret or not hmac.compare_digest(x_telegram_bot_api_secret_token or "", secret):
+    if not secret or not hmac.compare_digest((x_telegram_bot_api_secret_token or "").encode(), secret.encode()):
         raise HTTPException(status_code=401)
     try:
         await _bot().handle_update(await request.json())

@@ -1,3 +1,5 @@
+import httpx
+
 from tests.conftest import ask, button_update, draft_turn, text_update
 
 
@@ -36,6 +38,23 @@ async def test_duplicate_update_id_is_processed_once(make_bot):
     await bot.handle_update(update)
     await bot.handle_update(update)
     assert len(tg.sent) == 1 and llm.force_flags == [False]
+
+
+async def test_typing_indicator_is_shown_while_the_llm_works(make_bot):
+    bot, llm, tg, gh = make_bot([ask("q1")])
+    await bot.handle_update(text_update("idee"))
+    assert tg.actions and tg.actions[0][1] == "typing"
+
+
+async def test_typing_failure_does_not_break_the_reply(make_bot):
+    bot, llm, tg, gh = make_bot([ask("q1")])
+
+    async def boom(chat_id, action="typing"):
+        raise httpx.ConnectError("down")
+
+    tg.send_chat_action = boom
+    await bot.handle_update(text_update("idee"))
+    assert "runda 1/2" in tg.sent[-1][1]
 
 
 async def test_non_allowlisted_user_is_ignored(make_bot):

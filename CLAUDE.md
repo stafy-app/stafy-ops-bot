@@ -40,6 +40,14 @@ Steps after issue creation return warnings instead of raising, so the created is
 - **State** (`conversation.py`): `UpstashStore` (Upstash REST over httpx; keys `conv:<chat_id>` and `upd:<update_id>`) when `UPSTASH_REDIS_REST_URL/TOKEN` or `KV_REST_API_URL/TOKEN` are set, else `MemoryStore`. Conversations expire 72 h after their last activity (`TTL_SECONDS`, sliding). `upd:` keys dedupe Telegram's webhook retries. Webhook and long-polling are mutually exclusive on Telegram's side — `just webhook-delete` before `just poll`.
 - Only user IDs in `TELEGRAM_ALLOWED_USER_IDS` are served; everyone else is silently ignored.
 
+## Security
+
+- **Who can talk to it:** only IDs in `TELEGRAM_ALLOWED_USER_IDS` (checked first in `Bot.handle_update`, before any state, LLM or GitHub call; strangers get no reply). Optionally also restricted in BotFather. Webhook calls need `X-Telegram-Bot-Api-Secret-Token` (constant-time compare, 401 otherwise); `/docs`, `/redoc`, `/openapi.json` are disabled.
+- **What the LLM can do:** nothing but return an `LLMTurn`. No tools, no web, no code or docs access, no external content in its input — only the allowlisted user's own text, so prompt injection has no third-party channel. Output is validated against enums (4 repos, fixed areas/priorities/sizes); free text only lands in an issue body, and nothing is created without the user pressing **Create**. Off-topic messages get one redirecting question (`prompts.py` scope rule), not an answer.
+- **Secrets:** only in env (Vercel Sensitive vars / local `.env`, gitignored). The Telegram token is part of the API URL, so `TelegramClient` re-raises failures as `TelegramError` without the URL — never log raw httpx errors from Telegram calls.
+- **Data at rest:** conversations (user messages + drafts) sit in Upstash Redis for 72 h after last activity, then expire. Don't paste secrets into the chat; messages also go to the LLM provider.
+- **Known gaps:** no per-message rate limit or length cap (set a spend limit on the LLM key); two rapid **Create** presses on one draft can race and create two issues; `GITHUB_TOKEN` scope is whatever the PAT grants (a classic `repo` token covers every repo the owner can access — prefer fine-grained).
+
 ## CLI
 
 ```bash
