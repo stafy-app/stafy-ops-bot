@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Protocol
 
 import httpx
@@ -7,6 +8,9 @@ from pydantic import ValidationError
 from stafy_ops.config import Settings
 from stafy_ops.prompts import build_system_prompt
 from stafy_ops.schemas import LLMTurn
+from stafy_ops.usage import UsageStore, parse_usage
+
+log = logging.getLogger(__name__)
 
 
 class LLMError(Exception):
@@ -31,9 +35,21 @@ class OpenAICompatLLM:
     the prompt and is enforced by Pydantic, with one repair retry.
     """
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self, settings: Settings, client: httpx.AsyncClient | None = None, usage: UsageStore | None = None
+    ) -> None:
         self._s = settings
         self._client = client or httpx.AsyncClient(timeout=60)
+        self._usage = usage
+
+    async def _record(self, body: dict) -> None:
+        """Counts one call (retries included). Accounting must never break a reply."""
+        if self._usage is None:
+            return
+        try:
+            await self._usage.record(body.get("model") or self._s.llm_model, parse_usage(body.get("usage")))
+        except Exception:  # noqa: BLE001
+            log.warning("Usage recording failed", exc_info=False)
 
     async def _complete(self, messages: list[dict]) -> str:
         resp = await self._client.post(
@@ -46,7 +62,9 @@ class OpenAICompatLLM:
             },
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"] or ""
+        body = resp.json()
+        await self._record(body)
+        return body["choices"][0]["message"]["content"] or ""
 
     async def next_turn(self, messages: list[dict], *, force_draft: bool = False) -> LLMTurn:
         convo = [{"role": "system", "content": build_system_prompt(force_draft)}, *messages]

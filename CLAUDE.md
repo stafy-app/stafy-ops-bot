@@ -42,6 +42,13 @@ Steps after issue creation return warnings instead of raising, so the created is
 - **State** (`conversation.py`): `UpstashStore` (Upstash REST over httpx; keys `conv:<chat_id>` and `upd:<update_id>`) when `UPSTASH_REDIS_REST_URL/TOKEN` or `KV_REST_API_URL/TOKEN` are set, else `MemoryStore`. Conversations expire 72 h after their last activity (`TTL_SECONDS`, sliding). `upd:` keys dedupe Telegram's webhook retries. Webhook and long-polling are mutually exclusive on Telegram's side — `just webhook-delete` before `just poll`.
 - Only user IDs in `TELEGRAM_ALLOWED_USER_IDS` are served; everyone else is silently ignored.
 
+## Usage report (`/usage`)
+
+`usage.py`. Two sources, always labelled separately in the reply:
+
+- **"Botul"** — counted by the bot: `OpenAICompatLLM` records every call (repair retries included) from the response's `usage` (`prompt_tokens`, `completion_tokens`, cached tokens from `cached_tokens` / `prompt_tokens_details.cached_tokens` / DeepSeek's `prompt_cache_hit_tokens`, reasoning tokens, and `cost` when the provider sends it — OpenRouter always does). Stored per day in Upstash (`usage:YYYY-MM-DD` hash, fields `<model>|<counter>`, cost as integer micro-dollars, 40-day expiry) or in memory without Redis; "today" is the `Europe/Bucharest` date. Models without `cost` show `cost n/a`, partially costed days show `(k/n apeluri cu cost)`. Recording failures are swallowed — accounting never blocks a reply.
+- **"Cheia OpenRouter"** — OpenRouter's own numbers for the whole API key (`GET {LLM_BASE_URL}/key`: `usage_daily/weekly/monthly`, `usage`, `limit`, `limit_remaining`), so it also includes any other use of the key and follows OpenRouter's calendar. Shown only when `LLM_BASE_URL` contains `openrouter.ai` and the call succeeds.
+
 ## Security
 
 - **Who can talk to it:** only IDs in `TELEGRAM_ALLOWED_USER_IDS` (checked first in `Bot.handle_update`, before any state, LLM or GitHub call; strangers get no reply). Optionally also restricted in BotFather. Webhook calls need `X-Telegram-Bot-Api-Secret-Token` (constant-time compare, 401 otherwise); `/docs`, `/redoc`, `/openapi.json` are disabled.
@@ -70,6 +77,7 @@ Config: copy `.env.example` to `.env`; `config.Settings` validates it at startup
 | `prompts.py` | Live | System prompt: repos/areas, when to ask, grounding rules, embedded JSON schema |
 | `llm.py` | Live | `OpenAICompatLLM` (JSON mode + one repair retry), `LLM` protocol |
 | `conversation.py` | Live | `Conversation`, async `ConversationStore` protocol, `MemoryStore`, `UpstashStore` (72 h sliding TTL, update-id dedupe) |
+| `usage.py`, `upstash.py` | Live | `/usage` report, per-call accounting; shared Upstash REST client (commands + pipeline) |
 | `webhook.py` | Live | `just webhook-set <url>` / `webhook-info` / `webhook-delete` |
 | root `app.py` | Live | Vercel entrypoint |
 | `render.py` | Live | `render_body(IssueDraft)` per kind |

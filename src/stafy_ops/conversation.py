@@ -5,6 +5,7 @@ from typing import Protocol
 import httpx
 
 from stafy_ops.schemas import IssueDraft
+from stafy_ops.upstash import UpstashClient
 
 # Sliding expiry: every save refreshes it, so a conversation lives 72 h after its last activity.
 TTL_SECONDS = 72 * 3600
@@ -74,28 +75,18 @@ class UpstashStore:
     """Upstash Redis over its REST API (plain httpx, no extra dependency)."""
 
     def __init__(self, url: str, token: str, client: httpx.AsyncClient | None = None) -> None:
-        self._url = url.rstrip("/")
-        self._headers = {"Authorization": f"Bearer {token}"}
-        self._client = client or httpx.AsyncClient(timeout=10)
-
-    async def _cmd(self, *args: str | int):
-        resp = await self._client.post(self._url, headers=self._headers, json=list(args))
-        resp.raise_for_status()
-        body = resp.json()
-        if "error" in body:
-            raise RuntimeError(f"Upstash error: {body['error']}")
-        return body["result"]
+        self._r = UpstashClient(url, token, client)
 
     async def get(self, chat_id: int) -> Conversation:
-        raw = await self._cmd("GET", f"conv:{chat_id}")
+        raw = await self._r.cmd("GET", f"conv:{chat_id}")
         return Conversation.from_json(raw) if raw else Conversation()
 
     async def save(self, chat_id: int, conv: Conversation) -> None:
-        await self._cmd("SET", f"conv:{chat_id}", conv.to_json(), "EX", TTL_SECONDS)
+        await self._r.cmd("SET", f"conv:{chat_id}", conv.to_json(), "EX", TTL_SECONDS)
 
     async def delete(self, chat_id: int) -> None:
-        await self._cmd("DEL", f"conv:{chat_id}")
+        await self._r.cmd("DEL", f"conv:{chat_id}")
 
     async def seen(self, update_id: int) -> bool:
         # SET NX returns "OK" only for the first writer; null means the key already existed.
-        return await self._cmd("SET", f"upd:{update_id}", 1, "NX", "EX", TTL_SECONDS) is None
+        return await self._r.cmd("SET", f"upd:{update_id}", 1, "NX", "EX", TTL_SECONDS) is None

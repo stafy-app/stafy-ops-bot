@@ -1,7 +1,8 @@
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import datetime
 
 import httpx
 
@@ -12,6 +13,7 @@ from stafy_ops.llm import LLM, LLMError, history_message
 from stafy_ops.render import render_body
 from stafy_ops.schemas import MILESTONE_REPOS, IssueDraft
 from stafy_ops.telegram import Messenger
+from stafy_ops.usage import TZ, UsageStore, format_report, report_days
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +28,7 @@ _KEYBOARD = {
 }
 _HELP = (
     "Trimite o idee, un bug sau o sarcină. Pun întrebări dacă ceva nu e clar, apoi îți arăt un draft.\n"
-    "/draft — forțează draftul acum\n/cancel — renunță la conversația curentă"
+    "/draft — forțează draftul acum\n/cancel — renunță la conversația curentă\n/usage — consumul LLM (tokeni, cost)"
 )
 
 
@@ -43,8 +45,33 @@ def format_preview(d: IssueDraft) -> str:
 
 
 class Bot:
-    def __init__(self, settings: Settings, tg: Messenger, llm: LLM, gh: IssueCreator, store: ConversationStore) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        tg: Messenger,
+        llm: LLM,
+        gh: IssueCreator,
+        store: ConversationStore,
+        usage: UsageStore | None = None,
+        key_info: Callable[[], Awaitable[dict | None]] | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(TZ),
+    ) -> None:
         self._s, self._tg, self._llm, self._gh, self._store = settings, tg, llm, gh, store
+        self._usage, self._key_info, self._clock = usage, key_info, clock
+
+    async def _send_usage(self, chat_id: int) -> None:
+        if self._usage is None:
+            await self._tg.send_message(chat_id, "Raportul de consum nu e configurat.")
+            return
+        today = self._clock().date()
+        try:
+            per_day = await self._usage.load(report_days(today))
+        except (httpx.HTTPError, RuntimeError) as exc:
+            log.warning("Usage load failed: %s", type(exc).__name__)
+            await self._tg.send_message(chat_id, "Nu am putut citi consumul (eroare Redis).")
+            return
+        key_info = await self._key_info() if self._key_info else None
+        await self._tg.send_message(chat_id, format_report(per_day, today, self._s.llm_model, key_info))
 
     @contextlib.asynccontextmanager
     async def _typing(self, chat_id: int) -> AsyncIterator[None]:
@@ -89,6 +116,8 @@ class Bot:
         elif command == "/cancel":
             await self._store.delete(chat_id)
             await self._tg.send_message(chat_id, "Anulat.")
+        elif command == "/usage":
+            await self._send_usage(chat_id)
         elif command == "/draft":
             if not conv.messages:
                 await self._tg.send_message(chat_id, "Nu am nimic de rezumat încă.")

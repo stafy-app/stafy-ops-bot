@@ -8,6 +8,7 @@ dependencies = [
     "httpx>=0.28",
     "pydantic>=2.12",
     "pydantic-settings>=2.13",
+    "tzdata>=2024.1",  # IANA zones on Windows (zoneinfo has no system database there)
     "uvicorn>=0.34",
 ]
 
