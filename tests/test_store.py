@@ -11,9 +11,16 @@ def test_ttl_is_72_hours():
 
 
 def test_conversation_json_roundtrip():
-    conv = Conversation(messages=[{"role": "user", "content": "x"}], rounds=2, pending=make_draft(milestone="v0.2.0"))
+    pending = [make_draft(milestone="v0.2.0"), make_draft(repo="stafy-backend", area="backend")]
+    conv = Conversation(messages=[{"role": "user", "content": "x"}], rounds=2, pending=pending)
     restored = Conversation.from_json(conv.to_json())
-    assert restored.rounds == 2 and restored.messages == conv.messages and restored.pending == conv.pending
+    assert restored.rounds == 2 and restored.messages == conv.messages and restored.pending == pending
+
+
+def test_conversation_from_json_accepts_the_single_draft_format():
+    legacy = {"messages": [], "rounds": 1, "pending": make_draft().model_dump(mode="json")}
+    assert Conversation.from_json(json.dumps(legacy)).pending == [make_draft()]
+    assert Conversation.from_json(json.dumps({**legacy, "pending": None})).pending == []
 
 
 def upstash(handler) -> UpstashStore:

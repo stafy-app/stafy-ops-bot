@@ -1,6 +1,7 @@
 import httpx
 
-from tests.conftest import ask, button_update, draft_turn, text_update
+from stafy_ops.schemas import LLMTurn
+from tests.conftest import multi_draft_turn, ask, button_update, draft_turn, text_update
 
 
 async def test_ask_then_draft_then_create(make_bot):
@@ -30,6 +31,39 @@ async def test_explicit_milestone_is_kept(make_bot):
     bot, llm, tg, gh = make_bot([draft_turn(milestone="v0.3.0")])
     await bot.handle_update(text_update("idee, pune-l in v0.3.0"))
     assert "Milestone: v0.3.0" in tg.sent[-1][1]
+
+
+async def test_small_talk_gets_a_reply_without_using_a_question_round(make_bot):
+    chat = LLMTurn(action="chat", reply="Bine, mulțumesc! Ce issue-uri creăm azi?")
+    bot, llm, tg, gh = make_bot([chat, ask("q1")])
+    await bot.handle_update(text_update("salut, ce faci?"))
+    assert tg.sent[-1][1] == "Bine, mulțumesc! Ce issue-uri creăm azi?" and tg.sent[-1][2] is None
+
+    await bot.handle_update(text_update("vreau ceva in settings"))
+    assert "runda 1/2" in tg.sent[-1][1]  # the greeting did not count as round 1
+
+
+async def test_multi_issue_preview_creates_all_and_links_them(make_bot):
+    bot, llm, tg, gh = make_bot([multi_draft_turn()])
+    await bot.handle_update(text_update("sesiuni active: endpoint + ecran"))
+    assert [m[1].split("\n")[0] for m in tg.sent[:2]] == ["Issue 1/2", "Issue 2/2"]
+    assert tg.sent[-1][2] is not None and "stafy-backend, stafy-web-app" in tg.sent[-1][1]
+
+    await bot.handle_update(button_update("create"))
+    assert [d.repo.value for d in gh.created] == ["stafy-backend", "stafy-web-app"]
+    assert len(gh.linked) == 1 and len(gh.linked[0]) == 2
+    assert "issues/1" in tg.sent[-1][1] and "issues/2" in tg.sent[-1][1]
+
+
+async def test_partial_failure_keeps_only_the_remaining_drafts(make_bot):
+    bot, llm, tg, gh = make_bot([multi_draft_turn()], fail_on=2)
+    await bot.handle_update(text_update("idee"))
+    await bot.handle_update(button_update("create"))
+    assert [d.repo.value for d in gh.created] == ["stafy-backend"]
+    assert "Au rămas 1 draft" in tg.sent[-1][1] and "issues/1" in tg.sent[-1][1]
+
+    await bot.handle_update(button_update("create"))  # retry creates only the missing one
+    assert [d.repo.value for d in gh.created] == ["stafy-backend", "stafy-web-app"]
 
 
 async def test_duplicate_update_id_is_processed_once(make_bot):

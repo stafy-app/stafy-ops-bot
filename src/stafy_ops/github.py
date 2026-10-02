@@ -35,11 +35,14 @@ mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
 class CreatedIssue:
     url: str
     warnings: list[str] = field(default_factory=list)
+    number: int = 0
+    repo: str = ""
 
 
 class IssueCreator(Protocol):
     async def resolve_milestone(self, draft: IssueDraft) -> str | None: ...
     async def create_issue(self, draft: IssueDraft) -> CreatedIssue: ...
+    async def link_related(self, pairs: list[tuple[IssueDraft, CreatedIssue]]) -> list[str]: ...
 
 
 def _semver(tag: str) -> tuple[int, int, int] | None:
@@ -133,8 +136,25 @@ class GitHubClient:
         resp.raise_for_status()
         return resp.json()["number"]
 
+    async def link_related(self, pairs: list[tuple[IssueDraft, CreatedIssue]]) -> list[str]:
+        """Appends a `## Related` section (cross-repo `org/repo#n` references) to each issue of a multi-issue request."""
+        warnings: list[str] = []
+        for draft, created in pairs:
+            others = [f"- {self._s.github_org}/{c.repo}#{c.number}" for _, c in pairs if c is not created]
+            body = f"{render_body(draft)}\n## Related\n" + "\n".join(others) + "\n"
+            try:
+                resp = await self._client.patch(
+                    f"{_REST}/repos/{self._s.github_org}/{created.repo}/issues/{created.number}",
+                    headers=self._headers,
+                    json={"body": body},
+                )
+                resp.raise_for_status()
+            except Exception as exc:  # noqa: BLE001 — issues exist; report instead of failing
+                warnings.append(f"Related links not set on {created.repo}#{created.number}: {exc}")
+        return warnings
+
     async def create_issue(self, draft: IssueDraft) -> CreatedIssue:
-        payload: dict = {"title": draft.title, "body": render_body(draft), "labels": draft.labels}
+        payload: dict ={"title": draft.title, "body": render_body(draft), "labels": draft.labels}
         warnings: list[str] = []
         try:
             if title := draft.milestone or await self.resolve_milestone(draft):
@@ -150,7 +170,7 @@ class GitHubClient:
         )
         resp.raise_for_status()
         issue = resp.json()
-        created = CreatedIssue(url=issue["html_url"], warnings=warnings)
+        created = CreatedIssue(url=issue["html_url"], warnings=warnings, number=issue["number"], repo=draft.repo.value)
 
         try:
             resp = await self._client.post(

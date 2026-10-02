@@ -14,22 +14,28 @@ TTL_SECONDS = 72 * 3600
 class Conversation:
     messages: list[dict] = field(default_factory=list)
     rounds: int = 0
-    pending: IssueDraft | None = None
+    pending: list[IssueDraft] = field(default_factory=list)  # drafts awaiting Create
 
     def to_json(self) -> str:
         return json.dumps(
             {
                 "messages": self.messages,
                 "rounds": self.rounds,
-                "pending": self.pending.model_dump(mode="json") if self.pending else None,
+                "pending": [d.model_dump(mode="json") for d in self.pending],
             }
         )
 
     @classmethod
     def from_json(cls, raw: str) -> "Conversation":
         data = json.loads(raw)
-        pending = IssueDraft.model_validate(data["pending"]) if data.get("pending") else None
-        return cls(messages=data["messages"], rounds=data["rounds"], pending=pending)
+        pending = data.get("pending") or []
+        if isinstance(pending, dict):  # single-draft format stored before multi-issue support
+            pending = [pending]
+        return cls(
+            messages=data["messages"],
+            rounds=data["rounds"],
+            pending=[IssueDraft.model_validate(d) for d in pending],
+        )
 
 
 class ConversationStore(Protocol):

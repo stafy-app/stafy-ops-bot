@@ -7,7 +7,7 @@ import httpx
 
 from stafy_ops.config import Settings
 from stafy_ops.conversation import Conversation, ConversationStore
-from stafy_ops.github import IssueCreator
+from stafy_ops.github import CreatedIssue, IssueCreator
 from stafy_ops.llm import LLM, LLMError, history_message
 from stafy_ops.render import render_body
 from stafy_ops.schemas import MILESTONE_REPOS, IssueDraft
@@ -98,7 +98,7 @@ class Bot:
         elif command:
             await self._tg.send_message(chat_id, _HELP)
         else:
-            conv.pending = None  # a reply after a draft means "edit"
+            conv.pending = []  # a reply after a draft means "edit"
             conv.messages.append({"role": "user", "content": text})
             await self._advance(chat_id, conv)
 
@@ -112,19 +112,32 @@ class Bot:
             await self._tg.send_message(chat_id, "Nu am putut procesa mesajul (eroare LLM). Încearcă din nou.")
             return
         conv.messages.append(history_message(turn))
-        if turn.action == "ask":
+        if turn.action == "chat":  # small talk: reply only, does not use a question round
+            await self._tg.send_message(chat_id, turn.reply.strip())
+        elif turn.action == "ask":
             conv.rounds += 1
             lines = "\n".join(f"{n}. {q}" for n, q in enumerate(turn.questions, 1))
             await self._tg.send_message(chat_id, f"Întrebări (runda {conv.rounds}/{limit}):\n{lines}")
         else:
-            issue = turn.issue
-            try:
-                issue = issue.model_copy(update={"milestone": await self._gh.resolve_milestone(issue)})
-            except httpx.HTTPError as exc:
-                log.warning("Milestone resolve failed: %s", exc)
-            conv.pending = issue
-            await self._tg.send_message(chat_id, format_preview(issue), reply_markup=_KEYBOARD)
+            drafts = []
+            for issue in turn.issues:
+                try:
+                    issue = issue.model_copy(update={"milestone": await self._gh.resolve_milestone(issue)})
+                except httpx.HTTPError as exc:
+                    log.warning("Milestone resolve failed: %s", exc)
+                drafts.append(issue)
+            conv.pending = drafts
+            await self._send_previews(chat_id, drafts)
         await self._store.save(chat_id, conv)
+
+    async def _send_previews(self, chat_id: int, drafts: list[IssueDraft]) -> None:
+        if len(drafts) == 1:
+            await self._tg.send_message(chat_id, format_preview(drafts[0]), reply_markup=_KEYBOARD)
+            return
+        for n, draft in enumerate(drafts, 1):
+            await self._tg.send_message(chat_id, f"Issue {n}/{len(drafts)}\n\n{format_preview(draft)}")
+        summary = ", ".join(d.repo.value for d in drafts)
+        await self._tg.send_message(chat_id, f"{len(drafts)} issue-uri ({summary}). Create le creează pe toate.", reply_markup=_KEYBOARD)
 
     async def _on_button(self, chat_id: int, action: str) -> None:
         conv = await self._store.get(chat_id)
@@ -132,20 +145,36 @@ class Bot:
             await self._store.delete(chat_id)
             await self._tg.send_message(chat_id, "Anulat.")
         elif action == "edit":
-            conv.pending = None
+            conv.pending = []
             await self._store.save(chat_id, conv)
             await self._tg.send_message(chat_id, "Ce vrei să schimbi?")
         elif action == "create":
-            if conv.pending is None:
+            if not conv.pending:
                 await self._tg.send_message(chat_id, "Nu am un draft activ.")
                 return
-            try:
-                async with self._typing(chat_id):
-                    created = await self._gh.create_issue(conv.pending)
-            except httpx.HTTPError as exc:
-                log.warning("GitHub create failed: %s", exc)
-                await self._tg.send_message(chat_id, f"GitHub a refuzat crearea: {exc}. Draftul rămâne, apasă Create din nou.")
-                return
-            await self._store.delete(chat_id)
-            note = "\n".join(f"⚠ {w}" for w in created.warnings)
-            await self._tg.send_message(chat_id, f"Creat: {created.url}" + (f"\n{note}" if note else ""))
+            await self._create_pending(chat_id, conv)
+
+    async def _create_pending(self, chat_id: int, conv: Conversation) -> None:
+        done: list[tuple[IssueDraft, CreatedIssue]] = []
+        remaining = list(conv.pending)
+        try:
+            async with self._typing(chat_id):
+                while remaining:
+                    done.append((remaining[0], await self._gh.create_issue(remaining[0])))
+                    remaining.pop(0)
+                warnings = [w for _, c in done for w in c.warnings]
+                if len(done) > 1:
+                    warnings += await self._gh.link_related(done)
+        except httpx.HTTPError as exc:
+            log.warning("GitHub create failed: %s", exc)
+            conv.pending = remaining  # only what is still missing, so a retry cannot duplicate
+            await self._store.save(chat_id, conv)
+            created = "".join(f"\nCreat: {c.url}" for _, c in done)
+            await self._tg.send_message(
+                chat_id, f"GitHub a refuzat crearea: {exc}. Au rămas {len(remaining)} draft(uri), apasă Create din nou.{created}"
+            )
+            return
+        await self._store.delete(chat_id)
+        urls = f"Creat: {done[0][1].url}" if len(done) == 1 else "Create:\n" + "\n".join(f"- {c.url}" for _, c in done)
+        note = "\n".join(f"⚠ {w}" for w in warnings)
+        await self._tg.send_message(chat_id, urls + (f"\n{note}" if note else ""))

@@ -13,6 +13,14 @@ def test_ask_requires_questions():
         LLMTurn(action="ask", questions=["a", "b", "c", "d"])
 
 
+def test_chat_requires_a_reply():
+    assert LLMTurn(action="chat", reply="Salut!").reply == "Salut!"
+    with pytest.raises(ValidationError):
+        LLMTurn(action="chat", reply="  ")
+    with pytest.raises(ValidationError):
+        LLMTurn(action="chat", reply="x" * 501)
+
+
 def test_draft_requires_issue():
     with pytest.raises(ValidationError):
         LLMTurn(action="draft")

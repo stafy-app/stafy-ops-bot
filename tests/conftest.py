@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from stafy_ops.config import Settings
@@ -29,7 +30,17 @@ def ask(*questions: str) -> LLMTurn:
 
 
 def draft_turn(**overrides) -> LLMTurn:
-    return LLMTurn(action="draft", issue=make_draft(**overrides))
+    return LLMTurn(action="draft", issues=[make_draft(**overrides)])
+
+
+def multi_draft_turn() -> LLMTurn:
+    return LLMTurn(
+        action="draft",
+        issues=[
+            make_draft(repo="stafy-backend", area="backend", title="Add sessions endpoint"),
+            make_draft(repo="stafy-web-app", area="webapp", title="Show sessions in settings"),
+        ],
+    )
 
 
 class FakeLLM:
@@ -57,15 +68,25 @@ class FakeTelegram:
 
 
 class FakeGitHub:
-    def __init__(self) -> None:
+    def __init__(self, fail_on: int | None = None) -> None:
         self.created: list[IssueDraft] = []
+        self.linked: list[list[tuple[IssueDraft, CreatedIssue]]] = []
+        self.fail_on = fail_on  # 1-based index of the create_issue call that raises
 
     async def resolve_milestone(self, draft):
         return draft.milestone or "v0.2.0"
 
     async def create_issue(self, draft):
+        if self.fail_on == len(self.created) + 1:
+            self.fail_on = None
+            raise httpx.ConnectError("boom")
         self.created.append(draft)
-        return CreatedIssue(url="https://github.com/stafy-app/stafy-web-app/issues/1")
+        n = len(self.created)
+        return CreatedIssue(url=f"https://github.com/stafy-app/{draft.repo.value}/issues/{n}", number=n, repo=draft.repo.value)
+
+    async def link_related(self, pairs):
+        self.linked.append(pairs)
+        return []
 
 
 @pytest.fixture
@@ -83,8 +104,8 @@ def settings() -> Settings:
 
 @pytest.fixture
 def make_bot(settings):
-    def _make(turns: list[LLMTurn]):
-        llm, tg, gh = FakeLLM(turns), FakeTelegram(), FakeGitHub()
+    def _make(turns: list[LLMTurn], fail_on: int | None = None):
+        llm, tg, gh = FakeLLM(turns), FakeTelegram(), FakeGitHub(fail_on)
         return Bot(settings, tg, llm, gh, MemoryStore()), llm, tg, gh
 
     return _make

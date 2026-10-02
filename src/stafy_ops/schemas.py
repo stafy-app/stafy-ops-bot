@@ -80,15 +80,23 @@ class IssueDraft(BaseModel):
         return labels
 
 
+MAX_ISSUES = 5
+
+
 class LLMTurn(BaseModel):
-    action: Literal["ask", "draft"]
+    action: Literal["ask", "draft", "chat"]
     questions: list[str] = Field(default=[], description="1-3 questions in Romanian when action is `ask`")
-    issue: IssueDraft | None = None
+    reply: str = Field(default="", description="1-2 short friendly Romanian sentences when action is `chat`")
+    issues: list[IssueDraft] = Field(
+        default=[], description=f"1-{MAX_ISSUES} issues when action is `draft`: one per repo that needs work"
+    )
 
     @model_validator(mode="after")
     def _check(self) -> "LLMTurn":
         if self.action == "ask" and not 1 <= len(self.questions) <= 3:
             raise ValueError("`ask` requires 1-3 questions")
-        if self.action == "draft" and self.issue is None:
-            raise ValueError("`draft` requires `issue`")
+        if self.action == "chat" and not 1 <= len(self.reply.strip()) <= 500:
+            raise ValueError("`chat` requires a `reply` of 1-500 characters")
+        if self.action == "draft" and not 1 <= len(self.issues) <= MAX_ISSUES:
+            raise ValueError(f"`draft` requires 1-{MAX_ISSUES} `issues`")
         return self

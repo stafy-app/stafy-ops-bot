@@ -2,7 +2,7 @@ import json
 import httpx
 import pytest
 
-from stafy_ops.github import GitHubClient
+from stafy_ops.github import CreatedIssue, GitHubClient
 from tests.conftest import make_draft
 
 
@@ -43,6 +43,23 @@ async def test_create_issue_assigns_token_owner_and_sets_milestone(settings):
     created = await gh.create_issue(make_draft())
     assert sent["assignees"] == ["Kerolly"] and sent["milestone"] == 5
     assert created.url == "https://x/1"
+
+
+async def test_link_related_patches_each_issue_with_the_others(settings):
+    patched: dict[str, str] = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PATCH"
+        patched[request.url.path] = json.loads(request.content)["body"]
+        return httpx.Response(200, json={})
+
+    gh = GitHubClient(settings, httpx.AsyncClient(transport=httpx.MockTransport(respond)))
+    backend = (make_draft(repo="stafy-backend"), CreatedIssue(url="u1", number=10, repo="stafy-backend"))
+    web = (make_draft(repo="stafy-web-app"), CreatedIssue(url="u2", number=20, repo="stafy-web-app"))
+    assert await gh.link_related([backend, web]) == []
+    assert "- stafy-app/stafy-web-app#20" in patched["/repos/stafy-app/stafy-backend/issues/10"]
+    assert "- stafy-app/stafy-backend#10" in patched["/repos/stafy-app/stafy-web-app/issues/20"]
+    assert "stafy-backend#10" not in patched["/repos/stafy-app/stafy-backend/issues/10"]
 
 
 async def test_explicit_milestone_wins(settings):
